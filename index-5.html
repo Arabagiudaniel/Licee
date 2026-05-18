@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EduMap Olympiad Final Clean</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css"/>
+
+<style>
+body{margin:0;font-family:Arial;background:#f4f4f4;}
+header{background:#111;color:#fff;padding:12px;text-align:center;font-weight:bold;}
+
+#controls{
+display:flex;gap:10px;padding:10px;background:#fff;flex-wrap:wrap;
+}
+
+select{
+padding:10px;border-radius:8px;border:1px solid #ccc;
+}
+
+#map{height:75vh;width:100%;}
+
+.card{
+background:#fff;padding:10px;margin:5px 0;border-radius:8px;
+box-shadow:0 2px 4px rgba(0,0,0,0.1);
+}
+
+.rank{font-weight:bold;}
+.small{font-size:12px;color:#444;}
+</style>
+</head>
+
+<body>
+
+<header>Locul ideal dupa liceu  </header>
+
+<div id="controls">
+
+<select id="sectorFilter">
+<option value="">Toate sectoarele</option>
+<option value="1">Sector 1</option>
+<option value="2">Sector 2</option>
+<option value="3">Sector 3</option>
+<option value="4">Sector 4</option>
+<option value="5">Sector 5</option>
+<option value="6">Sector 6</option>
+</select>
+
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+<script>
+
+const map = L.map('map').setView([44.439,26.096],12);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+attribution:'© OpenStreetMap'
+}).addTo(map);
+
+let schools=[];
+let cafes=[];
+let routeControl=null;
+
+/* LAYER */
+let schoolLayer = L.layerGroup().addTo(map);
+
+/* DIST */
+function dist(a,b,c,d){
+const R=6371;
+const dLat=(c-a)*Math.PI/180;
+const dLon=(d-b)*Math.PI/180;
+
+const x =
+Math.sin(dLat/2)**2 +
+Math.cos(a*Math.PI/180) *
+Math.cos(c*Math.PI/180) *
+Math.sin(dLon/2)**2;
+
+return 2*R*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));
+}
+
+/* SECTOR */
+function getSector(lat,lon){
+if(lat>44.47) return 1;
+if(lon>26.15) return 3;
+if(lat<44.41) return 5;
+if(lat<44.42) return 4;
+return 2;
+}
+
+/* SCORE CAFEA */
+function scoreCafe(cafe,school){
+const d=dist(school.lat,school.lon,cafe.lat,cafe.lon);
+return (1/(d+0.1)) + (cafe.pop||0)*0.1;
+}
+
+/* TOP 3 CAFES */
+function top3(school){
+return cafes
+.map(c=>({c,score:scoreCafe(c,school)}))
+.sort((a,b)=>b.score-a.score)
+.slice(0,3);
+}
+
+/* ROUTE */
+function route(a,b,c,d){
+
+if(routeControl) map.removeControl(routeControl);
+
+routeControl = L.Routing.control({
+waypoints:[
+L.latLng(a,b),
+L.latLng(c,d)
+],
+addWaypoints:false,
+draggableWaypoints:false
+}).addTo(map);
+}
+
+/* LOAD DATA */
+async function load(){
+
+const q=`
+[out:json][timeout:25];
+(
+node["amenity"="school"](44.30,25.95,44.55,26.30);
+node["amenity"="cafe"](44.30,25.95,44.55,26.30);
+);
+out center;
+`;
+
+const res=await fetch("https://overpass-api.de/api/interpreter?data="+encodeURIComponent(q));
+const data=await res.json();
+
+schools=[];
+cafes=[];
+
+data.elements.forEach(e=>{
+const lat=e.lat||e.center?.lat;
+const lon=e.lon||e.center?.lon;
+if(!lat||!lon) return;
+
+const name=e.tags?.name||"Necunoscut";
+
+if(e.tags?.amenity==="cafe"){
+cafes.push({name,lat,lon,pop:Math.random()*10});
+}else{
+schools.push({
+name,
+lat,
+lon,
+sector:getSector(lat,lon)
+});
+}
+});
+
+renderSchools();
+}
+
+/* RENDER */
+function renderSchools(){
+
+schoolLayer.clearLayers();
+
+schools.forEach(s=>{
+
+const marker = L.marker([s.lat,s.lon])
+.bindPopup(`
+<b>🏫 ${s.name}</b><br>
+Sector ${s.sector}<br><br>
+<button onclick='selectSchool("${encodeURIComponent(JSON.stringify(s))}")'>
+Selectează
+</button>
+`);
+
+marker._sector = s.sector;
+
+schoolLayer.addLayer(marker);
+
+});
+
+}
+
+/* SELECT SCHOOL */
+function selectSchool(data){
+
+const school = JSON.parse(decodeURIComponent(data));
+
+const top = top3(school);
+const best = top[0].c;
+
+/* route */
+route(school.lat,school.lon,best.lat,best.lon);
+
+/* popup */
+const html = top.map((t,i)=>{
+
+const d=dist(school.lat,school.lon,t.c.lat,t.c.lon).toFixed(2);
+
+return `
+<div class="card">
+<div class="rank">#${i+1} ${t.c.name}</div>
+<div class="small">Scor: ${t.score.toFixed(3)}</div>
+<div class="small">Distanță: ${d} km</div>
+<div class="small">Rating: ${t.c.pop.toFixed(1)}/10</div>
+</div>`;
+}).join("");
+
+L.popup()
+.setLatLng([school.lat,school.lon])
+.setContent("<h3>🏆 Top Cafenele AI</h3>"+html)
+.openOn(map);
+
+}
+
+/* FILTER SECTOR FIX */
+document.getElementById("sectorFilter").addEventListener("change",function(){
+
+const val=this.value;
+
+schoolLayer.eachLayer(layer=>{
+
+if(!val || layer._sector==val){
+layer.addTo(map);
+} else {
+map.removeLayer(layer);
+}
+
+});
+
+});
+
+/* START */
+load();
+
+</script>
+
+</body>
+</html>
